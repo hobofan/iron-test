@@ -7,6 +7,8 @@ use iron;
 use iron::prelude::*;
 use iron::{Handler, headers, Headers, method, Url};
 
+use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::OsStrExt;
 use std::io::Cursor;
 
 use super::mock_stream::MockStream;
@@ -68,6 +70,79 @@ pub fn request<H: Handler>(method: method::Method,
     }
     buffer.push_str("\r\n");
     buffer.push_str(body);
+
+    let addr = "127.0.0.1:3000".parse().unwrap();
+    let protocol = match url.scheme() {
+        "http" => iron::Protocol::http(),
+        "https" => iron::Protocol::https(),
+        _ => panic!("unknown protocol {}", url.scheme()),
+    };
+
+    let mut stream = MockStream::new(Cursor::new(buffer.as_bytes().to_vec()));
+    let mut buf_reader = BufReader::new(&mut stream as &mut NetworkStream);
+    let http_request = hyper::server::Request::new(&mut buf_reader, addr).unwrap();
+    let mut req = Request::from_http(http_request, addr, &protocol).unwrap();
+
+    handler.handle(&mut req)
+}
+
+/// Convenience method for making GET requests to Iron Handlers.
+pub fn get_os<H: Handler>(path: &str, headers: Headers, handler: &H) -> IronResult<Response> {
+    request_os(method::Get, path, OsStr::new(""), headers, handler)
+}
+
+/// Convenience method for making POST requests with a body to Iron Handlers.
+pub fn post_os<H: Handler>(path: &str, headers: Headers, body: &OsStr, handler: &H) -> IronResult<Response> {
+    request_os(method::Post, path, body, headers, handler)
+}
+
+/// Convenience method for making PATCH requests with a body to Iron Handlers.
+pub fn patch_os<H: Handler>(path: &str, headers: Headers, body: &OsStr, handler: &H) -> IronResult<Response> {
+    request_os(method::Patch, path, body, headers, handler)
+}
+
+/// Convenience method for making PUT requests with a body to Iron Handlers.
+pub fn put_os<H: Handler>(path: &str, headers: Headers, body: &OsStr, handler: &H) -> IronResult<Response> {
+    request_os(method::Put, path, body, headers, handler)
+}
+
+/// Convenience method for making DELETE requests to Iron Handlers.
+pub fn delete_os<H: Handler>(path: &str, headers: Headers, handler: &H) -> IronResult<Response> {
+    request_os(method::Delete, path, OsStr::new(""), headers, handler)
+}
+
+/// Convenience method for making OPTIONS requests to Iron Handlers.
+pub fn options_os<H: Handler>(path: &str, headers: Headers, handler: &H) -> IronResult<Response> {
+    request_os(method::Options, path, OsStr::new(""), headers, handler)
+}
+
+/// Convenience method for making HEAD requests to Iron Handlers.
+pub fn head_os<H: Handler>(path: &str, headers: Headers, handler: &H) -> IronResult<Response> {
+    request_os(method::Head, path, OsStr::new(""), headers, handler)
+}
+
+/// Constructs an Iron::Request from the given parts and passes it to the
+/// `handle` method on the given Handler.
+pub fn request_os<H: Handler>(method: method::Method,
+                           path: &str,
+                           body: &OsStr,
+                           headers: Headers,
+                           handler: &H) -> IronResult<Response> {
+    let url = Url::parse(path).unwrap();
+    // From iron 0.5.x, iron::Request contains private field. So, it is not good to
+    // create iron::Request directly. Make http request and parse it with hyper,
+    // and make iron::Request from hyper::client::Request.
+    let mut buffer = OsString::new();
+    buffer.push(&format!("{} {} HTTP/1.1\r\n", &method, url));
+    buffer.push(&format!("Content-Length: {}\r\n", body.len() as u64));
+    for header in headers.iter() {
+        buffer.push(&format!("{}: {}\r\n", header.name(), header.value_string()));
+    }
+    if !headers.has::<headers::UserAgent>() {
+        buffer.push(&format!("User-Agent: iron-test\r\n"));
+    }
+    buffer.push("\r\n");
+    buffer.push(body);
 
     let addr = "127.0.0.1:3000".parse().unwrap();
     let protocol = match url.scheme() {
